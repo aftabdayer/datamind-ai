@@ -157,7 +157,12 @@ def compute_health_score(df, anomalies):
 
 def build_charts(df):
     charts = []
-    numeric_cols = df.select_dtypes(include=np.number).columns.tolist()
+    all_numeric = df.select_dtypes(include=np.number).columns.tolist()
+    # Filter out ID/key columns that aren't meaningful to chart
+    id_keywords = ["key", "id", "no", "number", "sr", "index", "code", "sku", "zip", "phone"]
+    numeric_cols = [c for c in all_numeric if not any(k in c.lower() for k in id_keywords)]
+    if len(numeric_cols) < 2:
+        numeric_cols = all_numeric  # fallback: use all if filter removes too many
     cat_cols = df.select_dtypes(include=["object", "category"]).columns.tolist()
     date_cols = [c for c in df.columns if any(k in c.lower() for k in ["date", "time", "year", "month", "day"])]
     PURPLE = "#667eea"
@@ -166,83 +171,102 @@ def build_charts(df):
                 font=dict(family="Inter", size=11, color="#374151"),
                 margin=dict(t=45, b=30, l=30, r=20), height=320)
 
-    if date_cols and numeric_cols:
-        for dc in date_cols:
-            nc = numeric_cols[0]
-            try:
-                tmp = df[[dc, nc]].dropna().copy()
-                tmp[dc] = pd.to_datetime(tmp[dc], errors="coerce")
-                tmp = tmp.dropna().sort_values(dc)
-                if len(tmp) > 2:
-                    fig = go.Figure()
-                    fig.add_trace(go.Scatter(x=tmp[dc], y=tmp[nc], mode="lines",
-                        line=dict(color=PURPLE, width=2.5), fill="tozeroy",
-                        fillcolor="rgba(102,126,234,0.1)", name=nc))
-                    fig.update_layout(**base, title=dict(text=f"📈 {nc} Trend Over Time", font=dict(size=13, color="#1a202c")))
-                    fig.update_xaxes(showgrid=False, linecolor="#e5e7eb")
-                    fig.update_yaxes(gridcolor="#f0f0f0", linecolor="#e5e7eb")
-                    charts.append(fig)
-                    break
-            except Exception:
-                pass
+    try:
+        if date_cols and numeric_cols:
+            for dc in date_cols:
+                nc = numeric_cols[0]
+                try:
+                    tmp = df[[dc, nc]].dropna().copy()
+                    tmp[dc] = pd.to_datetime(tmp[dc], errors="coerce")
+                    tmp = tmp.dropna().sort_values(dc)
+                    if len(tmp) > 2:
+                        fig = go.Figure()
+                        fig.add_trace(go.Scatter(x=tmp[dc], y=tmp[nc], mode="lines",
+                            line=dict(color=PURPLE, width=2.5), fill="tozeroy",
+                            fillcolor="rgba(102,126,234,0.1)", name=nc))
+                        fig.update_layout(**base, title=dict(text=f"📈 {nc} Trend Over Time", font=dict(size=13, color="#1a202c")))
+                        fig.update_xaxes(showgrid=False, linecolor="#e5e7eb")
+                        fig.update_yaxes(gridcolor="#f0f0f0", linecolor="#e5e7eb")
+                        charts.append(fig)
+                        break
+                except Exception:
+                    pass
+    except Exception:
+        pass
 
-    if cat_cols and numeric_cols:
-        best_cat = next((c for c in cat_cols if 2 <= df[c].nunique() <= 15), None)
-        if best_cat:
-            nc = numeric_cols[0]
-            agg = df.groupby(best_cat)[nc].mean().sort_values(ascending=False).head(12)
-            fig = go.Figure(go.Bar(
-                x=agg.index.astype(str), y=agg.values,
-                marker=dict(color=agg.values, colorscale=[[0,"#f0f4ff"],[1,PURPLE]], line=dict(width=0))))
-            fig.update_layout(**base, title=dict(text=f"📊 Avg {nc} by {best_cat}", font=dict(size=13, color="#1a202c")))
+    try:
+        if cat_cols and numeric_cols:
+            best_cat = next((c for c in cat_cols if 2 <= df[c].nunique() <= 15), None)
+            if best_cat:
+                nc = numeric_cols[0]
+                agg = df.groupby(best_cat)[nc].mean().sort_values(ascending=False).head(12)
+                fig = go.Figure(go.Bar(
+                    x=agg.index.astype(str), y=agg.values,
+                    marker=dict(color=agg.values, colorscale=[[0,"#f0f4ff"],[1,PURPLE]], line=dict(width=0))))
+                fig.update_layout(**base, title=dict(text=f"📊 Avg {nc} by {best_cat}", font=dict(size=13, color="#1a202c")))
+                fig.update_xaxes(showgrid=False, linecolor="#e5e7eb")
+                fig.update_yaxes(gridcolor="#f0f0f0", linecolor="#e5e7eb")
+                charts.append(fig)
+    except Exception:
+        pass
+
+    try:
+        if len(numeric_cols) >= 2:
+            corr = df[numeric_cols[:8]].corr().round(2)
+            fig = go.Figure(go.Heatmap(
+                z=corr.values, x=corr.columns, y=corr.index,
+                colorscale=[[0,"#f093fb"],[0.5,"#ffffff"],[1,PURPLE]],
+                zmid=0, text=corr.values.round(2), texttemplate="%{text}", textfont={"size": 9}))
+            heatmap_base = {**base, "title": dict(text="🔗 Correlation Heatmap", font=dict(size=13, color="#1a202c")), "height": 340}
+            fig.update_layout(**heatmap_base)
+            charts.append(fig)
+    except Exception:
+        pass
+
+    try:
+        if numeric_cols:
+            target = numeric_cols[0]
+            data = df[target].dropna()
+            if len(data) > 5:
+                fig = go.Figure()
+                fig.add_trace(go.Violin(y=data, name=target, box_visible=True, meanline_visible=True,
+                    fillcolor="rgba(102,126,234,0.25)", line_color=PURPLE))
+                fig.update_layout(**base, title=dict(text=f"🎻 {target} Distribution", font=dict(size=13, color="#1a202c")))
+                fig.update_yaxes(gridcolor="#f0f0f0")
+                charts.append(fig)
+    except Exception:
+        pass
+
+    try:
+        if len(numeric_cols) >= 2:
+            x_col, y_col = numeric_cols[0], numeric_cols[1]
+            color_col = next((c for c in cat_cols if df[c].nunique() <= 8), None)
+            fig = px.scatter(df, x=x_col, y=y_col, color=color_col,
+                trendline=None,
+                color_discrete_sequence=COLORS, opacity=0.75)
+            fig.update_traces(marker=dict(size=9, line=dict(width=1, color="white")))
+            fig.update_layout(**base, title=dict(text=f"🔵 {x_col} vs {y_col}", font=dict(size=13, color="#1a202c")))
             fig.update_xaxes(showgrid=False, linecolor="#e5e7eb")
             fig.update_yaxes(gridcolor="#f0f0f0", linecolor="#e5e7eb")
             charts.append(fig)
+    except Exception:
+        pass
 
-    if len(numeric_cols) >= 3:
-        corr = df[numeric_cols[:8]].corr().round(2)
-        fig = go.Figure(go.Heatmap(
-            z=corr.values, x=corr.columns, y=corr.index,
-            colorscale=[[0,"#f093fb"],[0.5,"#ffffff"],[1,PURPLE]],
-            zmid=0, text=corr.values.round(2), texttemplate="%{text}", textfont={"size": 9}))
-        fig.update_layout(**base, title=dict(text="🔗 Correlation Heatmap", font=dict(size=13, color="#1a202c")), height=340)
-        charts.append(fig)
-
-    if numeric_cols:
-        target = numeric_cols[0]
-        data = df[target].dropna()
-        if len(data) > 5:
-            fig = go.Figure()
-            fig.add_trace(go.Violin(y=data, name=target, box_visible=True, meanline_visible=True,
-                fillcolor="rgba(102,126,234,0.25)", line_color=PURPLE))
-            fig.update_layout(**base, title=dict(text=f"🎻 {target} Distribution", font=dict(size=13, color="#1a202c")))
-            fig.update_yaxes(gridcolor="#f0f0f0")
-            charts.append(fig)
-
-    if len(numeric_cols) >= 2:
-        x_col, y_col = numeric_cols[0], numeric_cols[1]
-        color_col = next((c for c in cat_cols if df[c].nunique() <= 8), None)
-        fig = px.scatter(df, x=x_col, y=y_col, color=color_col,
-            trendline="ols" if not color_col else None,
-            color_discrete_sequence=COLORS, opacity=0.75)
-        fig.update_traces(marker=dict(size=9, line=dict(width=1, color="white")))
-        fig.update_layout(**base, title=dict(text=f"🔵 {x_col} vs {y_col}", font=dict(size=13, color="#1a202c")))
-        fig.update_xaxes(showgrid=False, linecolor="#e5e7eb")
-        fig.update_yaxes(gridcolor="#f0f0f0", linecolor="#e5e7eb")
-        charts.append(fig)
-
-    if cat_cols and numeric_cols:
-        for c in cat_cols:
-            if 2 <= df[c].nunique() <= 8:
-                nc = numeric_cols[0]
-                agg = df.groupby(c)[nc].sum().sort_values(ascending=False)
-                fig = go.Figure(go.Pie(
-                    values=agg.values, labels=agg.index.astype(str), hole=0.45,
-                    marker=dict(colors=COLORS), textfont=dict(size=11)))
-                fig.update_layout(**base, title=dict(text=f"🥧 {nc} Share by {c}", font=dict(size=13, color="#1a202c")),
-                    showlegend=True, legend=dict(font=dict(size=10)))
-                charts.append(fig)
-                break
+    try:
+        if cat_cols and numeric_cols:
+            for c in cat_cols:
+                if 2 <= df[c].nunique() <= 8:
+                    nc = numeric_cols[0]
+                    agg = df.groupby(c)[nc].sum().sort_values(ascending=False)
+                    fig = go.Figure(go.Pie(
+                        values=agg.values, labels=agg.index.astype(str), hole=0.45,
+                        marker=dict(colors=COLORS), textfont=dict(size=11)))
+                    fig.update_layout(**base, title=dict(text=f"🥧 {nc} Share by {c}", font=dict(size=13, color="#1a202c")),
+                        showlegend=True, legend=dict(font=dict(size=10)))
+                    charts.append(fig)
+                    break
+    except Exception:
+        pass
 
     return charts[:6]
 
